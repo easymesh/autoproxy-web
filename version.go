@@ -1,6 +1,6 @@
 package main
 
-import "github.com/easymesh/autoproxy/engin"
+import "github.com/easymesh/autoproxy-web/engin"
 
 func init() {
 	engin.SetVersion(VersionGet())
