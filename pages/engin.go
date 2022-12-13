@@ -2,20 +2,21 @@ package pages
 
 import (
 	"fmt"
-	"github.com/astaxie/beego/logs"
-	"github.com/easymesh/autoproxy-web/models"
-	util "github.com/easymesh/autoproxy-web/uitl"
-	"github.com/easymesh/autoproxy-web/engin"
-	"github.com/GoAdminGroup/go-admin/modules/logger"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/GoAdminGroup/go-admin/modules/logger"
+	"github.com/astaxie/beego/logs"
+	"github.com/easymesh/autoproxy-web/engin"
+	"github.com/easymesh/autoproxy-web/models"
+	util "github.com/easymesh/autoproxy-web/uitl"
 )
 
 type ProxyEngin struct {
-	proxy  *models.Proxy
-	remote *models.Remote
+	proxy         *models.Proxy
+	remote        *models.Remote
 	access        engin.Access
 	localForward  engin.Forward
 	remoteForward engin.Forward
@@ -40,10 +41,10 @@ func parseAddress(protocal string, address string) (string, int, error) {
 		}
 		return "", 0, fmt.Errorf("protocal not support")
 	}
-	return address[:idx], util.Atoi(address[idx + 1:]), nil
+	return address[:idx], util.Atoi(address[idx+1:]), nil
 }
 
-func (p *ProxyEngin)authHandler(info *engin.AuthInfo) bool {
+func (p *ProxyEngin) authHandler(info *engin.AuthInfo) bool {
 	if info == nil {
 		logger.Warnf("not any auth info")
 		return false
@@ -60,7 +61,7 @@ func (p *ProxyEngin)authHandler(info *engin.AuthInfo) bool {
 	return false
 }
 
-func (p *ProxyEngin)AuthSwitch(auth int)  {
+func (p *ProxyEngin) AuthSwitch(auth int) {
 	if auth > 0 {
 		p.access.AuthHandlerSet(p.authHandler)
 	} else {
@@ -69,7 +70,7 @@ func (p *ProxyEngin)AuthSwitch(auth int)  {
 	p.proxy.Auth = auth
 }
 
-func (p *ProxyEngin)Stop()  {
+func (p *ProxyEngin) Stop() {
 	p.access.Shutdown()
 	if p.remoteForward != nil {
 		p.remoteForward.Close()
@@ -77,7 +78,7 @@ func (p *ProxyEngin)Stop()  {
 }
 
 func remoteForwardInit(remote *models.Remote) (engin.Forward, error) {
-	address, port , err := parseAddress(remote.Protocal, remote.Address)
+	address, port, err := parseAddress(remote.Protocal, remote.Address)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +109,7 @@ func remoteForwardInit(remote *models.Remote) (engin.Forward, error) {
 		auth = &engin.AuthInfo{User: remote.User, Token: remote.Password}
 	}
 
-	forward, err := engin.NewHttpsProtcal(address, 30, auth, tlsEnable, TLS_CERT_FILE, TLS_KEY_FILE )
+	forward, err := engin.NewHttpProxyForward(address, 30, auth, tlsEnable, TLS_CERT_FILE, TLS_KEY_FILE)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +145,7 @@ func remoteForwardTest(testurl string, forward engin.Forward) error {
 	return nil
 }
 
-func (p *ProxyEngin)DomainForwardFunc(address string, r *http.Request) engin.Forward {
+func (p *ProxyEngin) DomainForwardFunc(address string, r *http.Request) engin.Forward {
 	if DomainCheck(address) {
 		logs.Info("%s auto forward to remote proxy", address)
 		return p.remoteForward
@@ -152,11 +153,11 @@ func (p *ProxyEngin)DomainForwardFunc(address string, r *http.Request) engin.For
 	return PublicLocalForward
 }
 
-func (p *ProxyEngin)LocalForwardFunc(address string, r *http.Request) engin.Forward {
+func (p *ProxyEngin) LocalForwardFunc(address string, r *http.Request) engin.Forward {
 	return PublicLocalForward
 }
 
-func (p *ProxyEngin)ProxyForwardFunc(address string, r *http.Request) engin.Forward {
+func (p *ProxyEngin) ProxyForwardFunc(address string, r *http.Request) engin.Forward {
 	return p.remoteForward
 }
 
@@ -170,13 +171,6 @@ func NewProxyEngin(proxy *models.Proxy, remote *models.Remote) (*ProxyEngin, err
 	if remote != nil {
 		forword, err = remoteForwardInit(remote)
 		if err != nil {
-			return nil, err
-		}
-		err = remoteForwardTest("https://www.google.com/", forword)
-		if err != nil {
-			models.RemoteUpdate(remote.Tag, func(u *models.Remote) {
-				u.Status = err.Error()
-			})
 			return nil, err
 		}
 		models.RemoteUpdate(remote.Tag, func(u *models.Remote) {
@@ -210,12 +204,12 @@ func NewProxyEngin(proxy *models.Proxy, remote *models.Remote) (*ProxyEngin, err
 	proxyEngin.remoteForward = forword
 
 	switch strings.ToLower(proxy.Mode) {
-		case models.MODE_DOMAIN:
-			access.ForwardHandlerSet(proxyEngin.DomainForwardFunc)
-		case models.MODE_REMOTE:
-			access.ForwardHandlerSet(proxyEngin.ProxyForwardFunc)
-		case models.MODE_LOCAL:
-			access.ForwardHandlerSet(proxyEngin.LocalForwardFunc)
+	case models.MODE_DOMAIN:
+		access.ForwardHandlerSet(proxyEngin.DomainForwardFunc)
+	case models.MODE_REMOTE:
+		access.ForwardHandlerSet(proxyEngin.ProxyForwardFunc)
+	case models.MODE_LOCAL:
+		access.ForwardHandlerSet(proxyEngin.LocalForwardFunc)
 	default:
 		panic(fmt.Sprintf("proxy mode(%s) not support", proxy.Mode))
 	}
@@ -225,7 +219,6 @@ func NewProxyEngin(proxy *models.Proxy, remote *models.Remote) (*ProxyEngin, err
 
 var PublicLocalForward engin.Forward
 
-func init()  {
-	PublicLocalForward, _ = engin.NewDefault(30)
+func init() {
+	PublicLocalForward = engin.NewLocalForward(30)
 }
-
