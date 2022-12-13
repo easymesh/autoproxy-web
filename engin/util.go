@@ -1,18 +1,34 @@
 package engin
 
 import (
-	"github.com/astaxie/beego/logs"
+	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/astaxie/beego/logs"
 )
 
 type AuthInfo struct {
 	User  string
 	Token string
+}
+
+var (
+	uuid string
+)
+
+func init() {
+	rand.Seed(time.Now().UnixNano())
+	uuid = fmt.Sprintf("%08X-%016X-%08X", rand.Int31(), rand.Int63(), rand.Int31())
+}
+
+func GetUUID() string {
+	return uuid
 }
 
 func IsConnect(address string, timeout int) bool {
@@ -26,7 +42,7 @@ func IsConnect(address string, timeout int) bool {
 
 func Address(u *url.URL) string {
 	host := u.Host
-	if strings.Index(host,":") == -1 {
+	if strings.Index(host, ":") == -1 {
 		host += ":80"
 	}
 	return host
@@ -34,7 +50,7 @@ func Address(u *url.URL) string {
 
 func WriteFull(w io.Writer, body []byte) error {
 	begin := 0
-	for  {
+	for {
 		cnt, err := w.Write(body[begin:])
 		if cnt > 0 {
 			begin += cnt
@@ -48,73 +64,31 @@ func WriteFull(w io.Writer, body []byte) error {
 	}
 }
 
-type connectCopy struct {
-	in, out net.Conn
-	timeout time.Duration
-	flow  uint64
-	close chan struct{}
-	sync.WaitGroup
-}
-
-func (c *connectCopy)iocopy(in net.Conn, out net.Conn, statcall func(uint64))  {
+func iocopy(c *sync.WaitGroup, in net.Conn, out net.Conn) {
 	defer c.Done()
-	buff := make([]byte, 8192)
-	var err1 error
-	var err2 error
-	var cnt int
-	for  {
-		cnt, err1 = in.Read(buff)
-		if cnt > 0 {
-			statcall(uint64(cnt))
-			c.flow += uint64(cnt)
-			err2 = WriteFull(out, buff[:cnt])
-		}
-		if err1 != nil || err2 != nil {
-			c.close <- struct{}{}
-			break
-		}
+
+	size, err := io.Copy(in, out)
+	if size == 0 && err != nil {
+		logs.Warn("io copy fail", err.Error())
+	} else {
+		StatUpdate(0, size)
 	}
+
+	in.Close()
+	out.Close()
 }
 
-func (c *connectCopy)timer()  {
-	ticker := time.NewTicker(c.timeout)
+func Connect(acc *HttpAccess, in net.Conn, out net.Conn) {
+	var wg sync.WaitGroup
 
-	defer func() {
-		c.Done()
-		ticker.Stop()
+	StatUpdate(1, 0)
 
-		c.in.Close()
-		c.out.Close()
-	}()
+	wg.Add(2)
+	go iocopy(&wg, in, out)
+	go iocopy(&wg, out, in)
+	wg.Wait()
 
-	for  {
-		old := c.flow
-		select {
-		case <- ticker.C: {
-			new := c.flow
-			if new == old {
-				return
-			}
-		}
-		case <- c.close: {
-			return
-		}
-		}
-	}
-}
-
-func ConnectCopyWithTimeout(in net.Conn, out net.Conn, tmout int, statcall func(uint64)) {
-	c := new(connectCopy)
-	c.timeout = time.Duration(tmout) * time.Second
-	c.in = in
-	c.out = out
-	c.close = make(chan struct{}, 2)
-
-	c.Add(3)
-	go c.iocopy(in, out, statcall)
-	go c.iocopy(out, in, statcall)
-	go c.timer()
-	c.Wait()
+	StatUpdate(-1, 0)
 
 	logs.Info("connect %s <-> %s close", in.RemoteAddr(), out.RemoteAddr())
 }

@@ -2,31 +2,44 @@ package engin
 
 import (
 	"fmt"
-	"github.com/astaxie/beego/logs"
 	"io/ioutil"
 	"net"
 	"net/http"
+
+	"github.com/astaxie/beego/logs"
 )
 
-var HTTPS_CLIENT_CONNECT_FLAG  = []byte("HTTP/1.1 200 Connection Established\r\n\r\n")
-
-func (acc *HttpAccess)HttpsForward(address string, r *http.Request) (net.Conn, error) {
-	if acc.forwardHandler != nil {
-		forward := acc.forwardHandler(address, r)
-		return forward.Https(address, r)
+func (acc *HttpAccess) ForwardUpdate(address string, forward Forward) {
+	if acc.forwardUpdateHandler != nil {
+		acc.forwardUpdateHandler(address, forward)
 	}
-	return nil, fmt.Errorf("forward handler is null")
 }
 
-func (acc *HttpAccess)HttpForward(address string, r *http.Request) (*http.Response, error) {
-	if acc.forwardHandler != nil {
-		forward := acc.forwardHandler(address, r)
-		return forward.Http(r)
+func (acc *HttpAccess) HttpsForward(address string, r *http.Request) (net.Conn, error) {
+	if acc.forwardHandler == nil {
+		return nil, fmt.Errorf("forward handler is null")
 	}
-	return nil, fmt.Errorf("forward handler is null")
+	forward := acc.forwardHandler(address, r)
+	conn, err := forward.Https(address, r)
+	if err != nil {
+		acc.ForwardUpdate(address, forward)
+	}
+	return conn, err
 }
 
-func (acc *HttpAccess)HttpsRoundTripper(w http.ResponseWriter, r *http.Request) {
+func (acc *HttpAccess) HttpForward(address string, r *http.Request) (*http.Response, error) {
+	if acc.forwardHandler == nil {
+		return nil, fmt.Errorf("forward handler is null")
+	}
+	forward := acc.forwardHandler(address, r)
+	conn, err := forward.Http(r)
+	if err != nil {
+		acc.ForwardUpdate(address, forward)
+	}
+	return conn, err
+}
+
+func (acc *HttpAccess) HttpsRoundTripper(w http.ResponseWriter, r *http.Request) {
 	hij, ok := w.(http.Hijacker)
 	if !ok {
 		logs.Error("httpserver does not support hijacking")
@@ -40,37 +53,34 @@ func (acc *HttpAccess)HttpsRoundTripper(w http.ResponseWriter, r *http.Request) 
 
 	address := Address(r.URL)
 
-	err = WriteFull(client, HTTPS_CLIENT_CONNECT_FLAG)
-	if err != nil {
-		errstr := fmt.Sprintf("client connect %s fail", client.RemoteAddr())
-		logs.Error(errstr, err.Error())
-		http.Error(w, errstr, http.StatusInternalServerError)
-
-		client.Close()
-		return
-	}
-
 	server, err := acc.HttpsForward(address, r)
 	if err != nil {
 		errstr := fmt.Sprintf("can't forward hostname %s", address)
 		logs.Error(errstr, err.Error())
-		http.Error(w, errstr, http.StatusInternalServerError)
+		HttpError(w, errstr, http.StatusInternalServerError)
 
 		client.Close()
 		return
 	}
 
-	go func() {
-		ConnectCopyWithTimeout(client, server, 60, func(cnt uint64) {
-			acc.StatAdd(cnt)
-		})
-	}()
+	connection := fmt.Sprintf("HTTP/1.1 200 Connection Established\r\n\r\n")
+
+	err = WriteFull(client, []byte(connection))
+	if err != nil {
+		errstr := fmt.Sprintf("client connect %s fail", client.RemoteAddr())
+		logs.Error(errstr, err.Error())
+		HttpError(w, errstr, http.StatusInternalServerError)
+
+		client.Close()
+		return
+	}
+
+	go Connect(acc, client, server)
 }
 
-func (acc *HttpAccess)HttpRoundTripper(r *http.Request) (*http.Response, error) {
+func (acc *HttpAccess) HttpRoundTripper(r *http.Request) (*http.Response, error) {
 	if r.Body != nil {
 		r.Body = ioutil.NopCloser(r.Body)
 	}
 	return acc.HttpForward(Address(r.URL), r)
 }
-
